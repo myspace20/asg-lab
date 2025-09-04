@@ -1,3 +1,10 @@
 template-file-path: template.yml
-parameters: {}
+parameters:
+  PrivateSubnet1Cidr: 10.0.3.0/24
+  PublicSubnet2Cidr: 10.0.2.0/24
+  ExistingNatEipAllocationId: ''
+  VpcCidr: 10.0.0.0/16
+  PrivateSubnet2Cidr: 10.0.4.0/24
+  LatestAmiId: /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2
+  PublicSubnet1Cidr: 10.0.1.0/24
 tags: {}
