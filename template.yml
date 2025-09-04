@@ -1,21 +1,46 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Auto Scaling Lab - Apache Web Server with ALB and ASG
+Description: Auto Scaling Lab - Apache + PHP stress demo with ALB and auto-scaling
 
 Parameters:
-  KeyName:
-    Type: AWS::EC2::KeyPair::KeyName
-    Description: Name of an existing EC2 KeyPair for SSH access
+  VpcCidr:
+    Type: String
+    Default: 10.0.0.0/16
+
+  PublicSubnet1Cidr:
+    Type: String
+    Default: 10.0.1.0/24
+
+  PublicSubnet2Cidr:
+    Type: String
+    Default: 10.0.2.0/24
+
+  PrivateSubnet1Cidr:
+    Type: String
+    Default: 10.0.3.0/24
+
+  PrivateSubnet2Cidr:
+    Type: String
+    Default: 10.0.4.0/24
+
+  ExistingNatEipAllocationId:
+    Type: String
+    Default: ""
+
+  LatestAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2
+
+Conditions:
+  CreateNatEIP: !Equals [ !Ref ExistingNatEipAllocationId, "" ]
 
 Resources:
+
   VPC:
     Type: AWS::EC2::VPC
     Properties:
-      CidrBlock: 10.0.0.0/16
+      CidrBlock: !Ref VpcCidr
       EnableDnsSupport: true
       EnableDnsHostnames: true
-      Tags:
-        - Key: Name
-          Value: AutoScalingVPC
 
   InternetGateway:
     Type: AWS::EC2::InternetGateway
@@ -26,27 +51,37 @@ Resources:
       VpcId: !Ref VPC
       InternetGatewayId: !Ref InternetGateway
 
-  PublicSubnet:
+  PublicSubnet1:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref VPC
-      CidrBlock: 10.0.1.0/24
+      CidrBlock: !Ref PublicSubnet1Cidr
+      AvailabilityZone: eu-central-1a
       MapPublicIpOnLaunch: true
-      AvailabilityZone: !Select [0, !GetAZs '']
-      Tags:
-        - Key: Name
-          Value: PublicSubnet
 
-  PrivateSubnet:
+  PublicSubnet2:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref VPC
-      CidrBlock: 10.0.2.0/24
+      CidrBlock: !Ref PublicSubnet2Cidr
+      AvailabilityZone: eu-central-1b
+      MapPublicIpOnLaunch: true
+
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PrivateSubnet1Cidr
+      AvailabilityZone: eu-central-1a
       MapPublicIpOnLaunch: false
-      AvailabilityZone: !Select [0, !GetAZs '']
-      Tags:
-        - Key: Name
-          Value: PrivateSubnet
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PrivateSubnet2Cidr
+      AvailabilityZone: eu-central-1b
+      MapPublicIpOnLaunch: false
 
   PublicRouteTable:
     Type: AWS::EC2::RouteTable
@@ -61,45 +96,74 @@ Resources:
       DestinationCidrBlock: 0.0.0.0/0
       GatewayId: !Ref InternetGateway
 
-  PublicSubnetRouteTableAssociation:
+  PublicSubnet1RTAssoc:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
-      SubnetId: !Ref PublicSubnet
+      SubnetId: !Ref PublicSubnet1
       RouteTableId: !Ref PublicRouteTable
 
-  EIP:
+  PublicSubnet2RTAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  NatEIP:
     Type: AWS::EC2::EIP
+    Condition: CreateNatEIP
     Properties:
       Domain: vpc
 
-  NATGateway:
+  NatGateway:
     Type: AWS::EC2::NatGateway
     Properties:
-      AllocationId: !GetAtt EIP.AllocationId
-      SubnetId: !Ref PublicSubnet
+      SubnetId: !Ref PublicSubnet1
+      AllocationId: !If
+        - CreateNatEIP
+        - !GetAtt NatEIP.AllocationId
+        - !Ref ExistingNatEipAllocationId
 
-  PrivateRouteTable:
+  PrivateRouteTable1:
     Type: AWS::EC2::RouteTable
     Properties:
       VpcId: !Ref VPC
 
-  PrivateRoute:
+  PrivateRouteTable2:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+
+  PrivateRoute1:
     Type: AWS::EC2::Route
     Properties:
-      RouteTableId: !Ref PrivateRouteTable
+      RouteTableId: !Ref PrivateRouteTable1
       DestinationCidrBlock: 0.0.0.0/0
-      NatGatewayId: !Ref NATGateway
+      NatGatewayId: !Ref NatGateway
 
-  PrivateSubnetRouteTableAssociation:
+  PrivateRoute2:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable2
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+
+  PrivateSubnet1RTAssoc:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
-      SubnetId: !Ref PrivateSubnet
-      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref PrivateSubnet1
+      RouteTableId: !Ref PrivateRouteTable1
 
-  ALBSecurityGroup:
+  PrivateSubnet2RTAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet2
+      RouteTableId: !Ref PrivateRouteTable2
+
+
+  ALBSG:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Allow HTTP access from internet
+      GroupDescription: Allow HTTP from internet
       VpcId: !Ref VPC
       SecurityGroupIngress:
         - IpProtocol: tcp
@@ -107,7 +171,7 @@ Resources:
           ToPort: 80
           CidrIp: 0.0.0.0/0
 
-  EC2SecurityGroup:
+  InstanceSG:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupDescription: Allow HTTP from ALB
@@ -116,80 +180,111 @@ Resources:
         - IpProtocol: tcp
           FromPort: 80
           ToPort: 80
-          SourceSecurityGroupId: !Ref ALBSecurityGroup
+          SourceSecurityGroupId: !Ref ALBSG
 
-  ApplicationLoadBalancer:
-    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
-    Properties:
-      Name: ASG-ALB
-      Subnets:
-        - !Ref PublicSubnet
-      SecurityGroups:
-        - !Ref ALBSecurityGroup
-      Scheme: internet-facing
-      Type: application
 
-  ALBTargetGroup:
+  TargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
       VpcId: !Ref VPC
-      Port: 80
       Protocol: HTTP
+      Port: 80
       TargetType: instance
       HealthCheckPath: /
+      Matcher:
+        HttpCode: 200
 
-  ALBListener:
+  ALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Subnets:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+      SecurityGroups:
+        - !Ref ALBSG
+      Scheme: internet-facing
+      Type: application
+
+  Listener:
     Type: AWS::ElasticLoadBalancingV2::Listener
     Properties:
-      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      LoadBalancerArn: !Ref ALB
       Port: 80
       Protocol: HTTP
       DefaultActions:
         - Type: forward
-          TargetGroupArn: !Ref ALBTargetGroup
+          TargetGroupArn: !Ref TargetGroup
 
   LaunchTemplate:
     Type: AWS::EC2::LaunchTemplate
     Properties:
       LaunchTemplateData:
-        InstanceType: t2.micro
-        KeyName: !Ref KeyName
+        InstanceType: t3.micro
         ImageId: !Ref LatestAmiId
         SecurityGroupIds:
-          - !Ref EC2SecurityGroup
-        UserData: !Base64 |
-          #!/bin/bash
-          yum update -y
-          yum install -y httpd stress
-          INSTANCE_ID=$(curl http://169.254.169.254/latest/meta-data/instance-id)
-          PRIVATE_IP=$(curl http://169.254.169.254/latest/meta-data/local-ipv4)
-          cat <<EOF > /var/www/html/index.html
-          <html>
-          <head><title>Auto Scaling Lab</title></head>
-          <body>
-            <h1>Hello from $PRIVATE_IP / $INSTANCE_ID</h1>
-            <button onclick="fetch('/cgi-bin/stress.sh')">Stress CPU</button>
-          </body>
-          </html>
-          EOF
-          mkdir -p /var/www/cgi-bin
-          cat <<'EOF' > /var/www/cgi-bin/stress.sh
-          #!/bin/bash
-          /usr/bin/stress --cpu 2 --timeout 60 &
-          echo "Content-type: text/plain"
-          echo
-          echo "CPU stress triggered"
-          EOF
-          chmod +x /var/www/cgi-bin/stress.sh
-          echo "AddHandler cgi-script .sh" >> /etc/httpd/conf/httpd.conf
-          systemctl enable httpd
-          systemctl start httpd
+          - !Ref InstanceSG
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            set -eux
+            yum update -y
+            amazon-linux-extras install epel -y
+            yum install -y httpd php stress
+            systemctl start httpd
+            systemctl enable httpd
+
+            INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)
+            IP=$(curl -s http://169.254.169.254/latest/meta-data/local-ipv4)
+
+            cat <<EOF > /var/www/html/index.html
+            <html>
+            <head>
+              <title>Auto Scaling Demo</title>
+              <style>
+                body { font-family: Arial, sans-serif; margin: 40px; }
+                button { padding: 10px 15px; background: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer; }
+                button:hover { background: #45A049; }
+              </style>
+              <script>
+                function stressCpu() {
+                  document.getElementById('status').innerText = 'Stressing CPU...';
+                  fetch('/stress.php')
+                    .then(response => response.text())
+                    .then(data => {
+                      document.getElementById('status').innerText = data;
+                    })
+                    .catch(error => {
+                      document.getElementById('status').innerText = 'Error: ' + error;
+                    });
+                }
+              </script>
+            </head>
+            <body>
+              <h1>Hello from $IP / $INSTANCE_ID</h1>
+              <p>Click the button to stress the CPU and trigger auto scaling:</p>
+              <button onclick="stressCpu()">Stress CPU</button>
+              <p id="status"></p>
+            </body>
+            </html>
+            EOF
+
+            cat <<EOF > /var/www/html/stress.php
+            <?php
+            shell_exec('nohup stress --cpu 2 --timeout 60 > /tmp/stress.log 2>&1 &');
+            echo "Stressing CPU for 60 seconds. Check CloudWatch for CPU utilization.";
+            ?>
+            EOF
+
+            chown apache:apache /var/www/html/*
+            chmod 755 /var/www/html/stress.php
+            systemctl restart httpd
 
   AutoScalingGroup:
     Type: AWS::AutoScaling::AutoScalingGroup
     Properties:
       VPCZoneIdentifier:
-        - !Ref PrivateSubnet
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
       LaunchTemplate:
         LaunchTemplateId: !Ref LaunchTemplate
         Version: !GetAtt LaunchTemplate.LatestVersionNumber
@@ -197,45 +292,19 @@ Resources:
       MaxSize: "4"
       DesiredCapacity: "1"
       TargetGroupARNs:
-        - !Ref ALBTargetGroup
+        - !Ref TargetGroup
 
-  CPUAlarmHigh:
-    Type: AWS::CloudWatch::Alarm
-    Properties:
-      AlarmDescription: Alarm if CPU > 30% for 2 minutes
-      Namespace: AWS/EC2
-      MetricName: CPUUtilization
-      Dimensions:
-        - Name: AutoScalingGroupName
-          Value: !Ref AutoScalingGroup
-      Statistic: Average
-      Period: 60
-      EvaluationPeriods: 2
-      Threshold: 30
-      ComparisonOperator: GreaterThanThreshold
-      AlarmActions:
-        - !Ref ScaleOutPolicy
-
-  ScaleOutPolicy:
+  ScaleOnCPU:
     Type: AWS::AutoScaling::ScalingPolicy
     Properties:
       AutoScalingGroupName: !Ref AutoScalingGroup
-      AdjustmentType: ChangeInCapacity
-      ScalingAdjustment: 1
-      Cooldown: 60
-
-Mappings:
-  RegionMap:
-    us-east-1:
-      AMI: ami-08c40ec9ead489470
-    us-west-2:
-      AMI: ami-0b2f6494ff0b07a0e
+      PolicyType: TargetTrackingScaling
+      TargetTrackingConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ASGAverageCPUUtilization
+        TargetValue: 30.0
 
 Outputs:
-  LoadBalancerDNSName:
-    Description: ALB URL
-    Value: !GetAtt ApplicationLoadBalancer.DNSName
-
-  GitInstructions:
-    Description: "Push this file to GitHub repo for lab deliverable"
-    Value: "https://github.com/your-username/aws-auto-scaling-lab"
+  LoadBalancerDNS:
+    Description: ALB DNS name
+    Value: !GetAtt ALB.DNSName
